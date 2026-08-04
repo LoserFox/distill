@@ -1,0 +1,13 @@
+{
+  "id": "distill",
+  "version": "0.1.0",
+  "main": "./lib/index.js",
+  "description": "Automatic conversation reflection and skill distillation",
+  "engines": {
+    "dsh": ">=0.0.1"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  }
+}
