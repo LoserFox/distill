@@ -1,5 +1,15 @@
 # @dsh-external/distill
 
+> ## ⚠️ 已停更（DEPRECATED）
+>
+> 本插件自 **2026-08-05** 起停止更新，功能已并入 [dsh-memory-evolve](https://github.com/dsh-external/dsh-memory-evolve) **v0.2.0+**：统一的 Hermes 式后台审查回路同时产出记忆与技能蒸馏，技能轨采用与 distill 相同的机制（审查子代理经 `structured_output` 提议，插件按 `distilled-by: dsh-distill` 所有权标记落盘）。
+>
+> **迁移**：
+> 1. `dshx remove distill`
+> 2. `dshx install dsh-memory-evolve <dir|git-url>`（或按 [dsh-memory-evolve README](https://github.com/dsh-external/dsh-memory-evolve) 手工挂载）
+> 3. 在插件 config 中开启 `reviewEnabled: true`
+> 4. 旧 distill 蒸馏的技能无需迁移——标记相同，dsh-memory-evolve 可继续识别与更新
+
 ## 安装（dshx / Marisa 外部插件）
 
 ```sh
