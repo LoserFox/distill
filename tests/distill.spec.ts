@@ -21,16 +21,19 @@ class RecordingProvider implements SubagentProvider {
   readonly capabilities: SubagentCapabilities = { outputSchema: true, depthLimit: true, toolFilter: true, persona: true }
   readonly inheritsParentContext = false
   readonly requests: ResolvedSubagentStartRequest[] = []
+  /** Run ids passed to each spawned run's `dispose`; the run handle leak tracer. */
+  readonly disposedRuns: string[] = []
   private readonly structured: unknown
   private readonly stopReason: SubagentResult['stopReason']
   private readonly startError: Error | undefined
   private readonly noCapture: boolean
   private readonly resultPromise: Promise<SubagentResult> | undefined
+  private readonly disposeError: Error | undefined
 
   constructor(
     name: string,
     structured: unknown,
-    options: { stopReason?: SubagentResult['stopReason']; startError?: Error; noCapture?: boolean; resultPromise?: Promise<SubagentResult> } = {},
+    options: { stopReason?: SubagentResult['stopReason']; startError?: Error; noCapture?: boolean; resultPromise?: Promise<SubagentResult>; disposeError?: Error } = {},
   ) {
     this.name = name
     this.structured = structured
@@ -38,6 +41,7 @@ class RecordingProvider implements SubagentProvider {
     this.startError = options.startError
     this.noCapture = options.noCapture ?? false
     this.resultPromise = options.resultPromise
+    this.disposeError = options.disposeError
   }
 
   async start(request: ResolvedSubagentStartRequest): Promise<SubagentRun> {
@@ -51,7 +55,10 @@ class RecordingProvider implements SubagentProvider {
         structured: this.noCapture ? undefined : this.structured,
         stopReason: this.stopReason,
       }),
-      dispose: async () => {},
+      dispose: async () => {
+        this.disposedRuns.push(String(request.id))
+        if (this.disposeError !== undefined) throw this.disposeError
+      },
     }
   }
 }
@@ -109,7 +116,7 @@ function stubAgent(session: Session, options: { provider?: string; model?: strin
   } as unknown as Agent
 }
 
-async function setup(structured: unknown = CREATE_JSON, options: { stopReason?: SubagentResult['stopReason']; startError?: Error; noCapture?: boolean; resultPromise?: Promise<SubagentResult> } = {}) {
+async function setup(structured: unknown = CREATE_JSON, options: { stopReason?: SubagentResult['stopReason']; startError?: Error; noCapture?: boolean; resultPromise?: Promise<SubagentResult>; disposeError?: Error } = {}) {
   const ctx = new Context()
   await ctx.plugin(SubagentService)
   await ctx.plugin(AgentRegistry)
@@ -155,6 +162,7 @@ describe('dsh-distill', () => {
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
     expect(provider.requests[0]?.label).toBe('distill-review')
     expect(provider.requests[0]?.agentOptions).toMatchObject({ provider: 'route', model: 'model', maxTokens: 2048 })
+    expect(provider.disposedRuns).toHaveLength(1)
     expect(provider.requests[0]?.toolFilter).toEqual({ allow: ['skill'] })
     expect(provider.requests[0]?.outputSchema).toBeDefined()
     const prompt = provider.requests[0]?.prompt[0]
@@ -499,6 +507,46 @@ describe('dsh-distill', () => {
     await ctx.fiber.dispose()
   })
 
+  it('disposes the review run even when the provider result rejects', async () => {
+    const { ctx, dir, provider } = await setup(CREATE_JSON, { resultPromise: Promise.reject(new Error('provider boom')) })
+    await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
+    const session = ctx.sessions.create(SessionId('s25'), { meta: { cwd: dir } })
+    const agent = stubAgent(session)
+    ctx.agents.register(agent)
+    userMessage(session, 'hello')
+    settleAgent(ctx, agent, { kind: 'completed' })
+
+    // The rejected result must still release the run handle…
+    await vi.waitFor(() => { expect(provider.disposedRuns).toHaveLength(1) }, { timeout: 5000 })
+    // …and free the in-flight guard so a later settle can dispatch again.
+    userMessage(session, 'another message')
+    settleAgent(ctx, agent, { kind: 'completed' })
+    await vi.waitFor(() => { expect(provider.requests).toHaveLength(2) }, { timeout: 5000 })
+    await vi.waitFor(() => { expect(provider.disposedRuns).toHaveLength(2) }, { timeout: 5000 })
+    await expect(readFile(join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md'), 'utf8')).rejects.toThrow()
+    await rm(dir, { recursive: true, force: true })
+    await ctx.fiber.dispose()
+  })
+
+  it('disposes and continues when run.dispose itself fails', async () => {
+    const { ctx, dir, provider } = await setup(CREATE_JSON, { disposeError: new Error('dispose boom') })
+    await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
+    const session = ctx.sessions.create(SessionId('s26'), { meta: { cwd: dir } })
+    const agent = stubAgent(session)
+    ctx.agents.register(agent)
+    userMessage(session, 'hello')
+    settleAgent(ctx, agent, { kind: 'completed' })
+
+    await vi.waitFor(() => { expect(provider.disposedRuns).toHaveLength(1) }, { timeout: 5000 })
+    // A dispose failure must not mask the successful review: the skill is still
+    // written and the loop keeps running.
+    await waitForFile(join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md'))
+    const content = await readFile(join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md'), 'utf8')
+    expect(content).toContain('name: issue-format')
+    await rm(dir, { recursive: true, force: true })
+    await ctx.fiber.dispose()
+  })
+
   it('logs and continues when the review subagent ends with an error', async () => {
     const { ctx, dir, provider } = await setup(CREATE_JSON, { stopReason: 'error' })
     await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
@@ -512,6 +560,7 @@ describe('dsh-distill', () => {
     await settle()
 
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
+    expect(provider.disposedRuns).toHaveLength(1)
     await expect(readFile(join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md'), 'utf8')).rejects.toThrow()
     await rm(dir, { recursive: true, force: true })
     await ctx.fiber.dispose()

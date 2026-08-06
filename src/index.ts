@@ -323,8 +323,9 @@ function resolveTarget(
  * whitelist limited to the model-facing `skill` viewer (Hermes' skill_view
  * analog), the resolved auxiliary route, and the structured-output contract.
  * The run is detached from the settled turn: the caller owns the result
- * promise and disposes the run after settlement, so the review never blocks
- * the loop, and the shared deadline cancels the child on timeout.
+ * promise and disposes the run in a `finally` block, so the review never
+ * blocks the loop, the handle is released whether the child settled with a
+ * result or failed, and the shared deadline cancels the child on timeout.
  * @param ctx - context exposing the subagent service.
  * @param config - validated plugin configuration.
  * @param agent - the settled parent agent authorizing the delegation.
@@ -351,17 +352,28 @@ async function runReview(
     toolFilter: { allow: [SKILL_TOOL] },
     outputSchema: REVIEW_SCHEMA,
   })
-  const result: SubagentResult = await run.result
-  await run.dispose()
-  if (result.stopReason !== 'completed') {
-    ctx.logger.warn(`distill: review subagent ended with ${result.stopReason}`)
-    return undefined
+  try {
+    const result: SubagentResult = await run.result
+    if (result.stopReason !== 'completed') {
+      ctx.logger.warn(`distill: review subagent ended with ${result.stopReason}`)
+      return undefined
+    }
+    if (result.structured === undefined) {
+      ctx.logger.warn('distill: review subagent finished without a structured proposal')
+      return undefined
+    }
+    return result.structured
+  } finally {
+    // The run handle must be released whether the child settled with a result
+    // or its result promise rejected (provider error after start, network
+    // outage, or an abort triggered by the shared deadline). A dispose failure
+    // is logged but must not mask the original result.
+    try {
+      await run.dispose()
+    } catch (error) {
+      ctx.logger.warn(`distill: review subagent dispose failed: ${errorMessage(error)}`)
+    }
   }
-  if (result.structured === undefined) {
-    ctx.logger.warn('distill: review subagent finished without a structured proposal')
-    return undefined
-  }
-  return result.structured
 }
 
 /**
