@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { Context } from 'cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -121,8 +121,8 @@ async function setup(structured: unknown = CREATE_JSON, options: { stopReason?: 
   return { ctx, dir, provider }
 }
 
-function settleAgent(ctx: Context, agent: Agent, reason: { kind: 'completed' }): void {
-  agentEvents(ctx, agent).emit('agent/settled', 1, reason)
+function settleAgent(ctx: Context, agent: Agent): void {
+  agentEvents(ctx, agent).emit('agent/turn-stopping', { turn: 1, signal: new AbortController().signal })
 }
 
 describe('dsh-distill', () => {
@@ -142,7 +142,7 @@ describe('dsh-distill', () => {
     ctx.agents.register(agent)
     const s1 = userMessage(session, 'how do I file an issue?')
     const s2 = userMessage(session, 'use [bug][area] format')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
@@ -182,26 +182,6 @@ describe('dsh-distill', () => {
     await ctx.fiber.dispose()
   })
 
-  it('does not review when the settle reason is not completed', async () => {
-    const { ctx, dir, provider } = await setup()
-    await ctx.plugin(distill, {
-      minUserMessages: 1,
-      provider: 'route',
-      model: 'model',
-      targetRoot: 'project',
-    })
-    const session = ctx.sessions.create(SessionId('s2'), { meta: { cwd: dir } })
-    const agent = stubAgent(session)
-    ctx.agents.register(agent)
-    userMessage(session, 'hello')
-    agentEvents(ctx, agent).emit('agent/settled', 1, { kind: 'error', error: new Error('boom') })
-    await settle()
-
-    expect(provider.requests).toHaveLength(0)
-    await rm(dir, { recursive: true, force: true })
-    await ctx.fiber.dispose()
-  })
-
   it('skips review below the message threshold', async () => {
     const { ctx, dir, provider } = await setup()
     await ctx.plugin(distill, {
@@ -216,7 +196,7 @@ describe('dsh-distill', () => {
     userMessage(session, 'one')
     userMessage(session, 'two')
     userMessage(session, '   ')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -232,7 +212,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session, { provider: 'agent-route', model: 'agent-model' })
     ctx.agents.register(agent)
     userMessage(session, 'do the thing')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
 
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
@@ -248,7 +228,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
 
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
@@ -267,7 +247,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
 
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) })
@@ -296,7 +276,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'always include a reproduction checklist')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -326,7 +306,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -347,7 +327,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -364,7 +344,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -388,7 +368,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -413,7 +393,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -441,7 +421,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
 
@@ -484,13 +464,13 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
 
     // The failed review must not crash the loop; the pending job is released.
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
@@ -506,7 +486,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
@@ -524,7 +504,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
@@ -542,7 +522,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     await settle()
@@ -560,7 +540,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session) // no provider/model in options
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
 
     expect(provider.requests).toHaveLength(0)
@@ -575,12 +555,12 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     const first = userMessage(session, 'first message')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     // The first pass must settle before the second message, or the in-flight
     // guard would skip the second dispatch by design.
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
     const second = userMessage(session, 'second message')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(2) }, { timeout: 5000 })
     const requests = session.events.filter(event => event.type === 'session/distill-review-request')
     expect(requests[0]?.data.messageSeqs).toEqual([first])
@@ -599,7 +579,7 @@ describe('dsh-distill', () => {
       const agent = stubAgent(session)
       ctx.agents.register(agent)
       userMessage(session, 'hello')
-      settleAgent(ctx, agent, { kind: 'completed' })
+      settleAgent(ctx, agent)
       await settle()
       await settle()
 
@@ -623,10 +603,10 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
     // A second settle while the first review is still running is skipped.
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await settle()
     await settle()
     expect(provider.requests).toHaveLength(1)
@@ -651,7 +631,7 @@ describe('dsh-distill', () => {
     const agent = stubAgent(session)
     ctx.agents.register(agent)
     const msg = userMessage(session, 'hello')
-    settleAgent(ctx, agent, { kind: 'completed' })
+    settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
 
     const request = session.events.filter(event => event.type === 'session/distill-review-request')
@@ -671,7 +651,7 @@ describe('dsh-distill', () => {
       const agent = stubAgent(session)
       ctx.agents.register(agent)
       userMessage(session, 'hello')
-      settleAgent(ctx, agent, { kind: 'completed' })
+      settleAgent(ctx, agent)
       await settle()
       await settle()
 
@@ -695,7 +675,7 @@ describe('dsh-distill', () => {
       const agent = stubAgent(session)
       ctx.agents.register(agent)
       userMessage(session, 'hello')
-      settleAgent(ctx, agent, { kind: 'completed' })
+      settleAgent(ctx, agent)
       await settle()
       await settle()
 

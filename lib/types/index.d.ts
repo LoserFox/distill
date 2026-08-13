@@ -1,7 +1,7 @@
 /**
  * Automatic conversation reflection and skill distillation.
  *
- * Listens for `agent/settled` and, after enough new user messages accumulate,
+ * Listens for `agent/turn-stopping` and, after enough new user messages accumulate,
  * spawns a background review subagent over the recent conversation (Hermes
  * Agent's background-review shape: a forked agent with a restricted toolset,
  * running after the turn, never competing with the user's task). When the
@@ -20,8 +20,8 @@
  *
  * @module @dsh-external/distill
  */
-import type { Context } from 'cordis';
-import z from 'schemastery';
+import type { Context } from '@deepseek-ai/cordis';
+import z from '@deepseek-ai/schemastery';
 export declare const name = "distill";
 export declare const inject: string[];
 /** Distillation plugin configuration. */
@@ -102,7 +102,7 @@ export interface DistillMessageWindow {
     readonly throughSeq: number;
 }
 /**
- * Register the distillation plugin: review scheduling on `agent/settled`,
+ * Register the distillation plugin: review scheduling on `agent/turn-stopping`,
  * background subagent dispatch, and `SKILL.md` materialization into a local
  * skill root.
  * @param ctx - context exposing the subagent and skill services.

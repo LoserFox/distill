@@ -1,14 +1,18 @@
 # @dsh-external/distill
 
-## 安装（mygo 外部插件）
+## 安装（DSH profile bundle）
 
 ```sh
-mygo install distill <目录|git-url>
+# 从本仓库 checkout 安装到 profile（web / headless 等），bundle 声明自动加入组合层
+dsh plugin --profile web add <目录|git-url>
+# 验证
+dsh --profile web --dump-config | grep distill
 ```
 
-- 清单 id：`distill`（dsh.plugin.json）；不注册任何面向模型的工具或技能——它只挂接 `agent/settled` 并运行后台反省。
-- **宿主前提**：dsh 组合（cordis.yml）必须挂载 `subagent-spawn`（注册反省子代理使用的 `spawn` 子代理提供方）与 `tool-skill`（子代理可调用的 `skill` 查看器）——两者在 `base.cordis.yml` 中默认存在。
-- 卸载：`mygo remove distill`。
+- 插入行 id：`distill`（cordis.patch.yml）；不注册任何面向模型的工具或技能——它只挂接 `agent/turn-stopping` 并运行后台反省。
+- **宿主前提**：dsh 组合必须挂载 `subagent-spawn`（注册反省子代理使用的 `spawn` 子代理提供方）与 `tool-skill`（子代理可调用的 `skill` 查看器）——两者在 base bundle 中默认存在。
+- 卸载：`dsh plugin --profile web remove distill`。
+- 安装后需重启目标 profile 的 DSH 进程（组合层变更不参与 HMR 热更新）。
 
 ## 概述
 
@@ -18,7 +22,7 @@ mygo install distill <目录|git-url>
 
 ## 行为
 
-每次 `agent/settled` 以 `completed` 原因结束时，插件会收集自上次蒸馏检查点以来新增的人类 `user/message` 事件；数量达到 `minUserMessages` 后，派发一个后台反省子代理（Hermes Agent 后台反省的形态：受限工具集的全新子代理，在回合之后运行，从不与用户任务争抢）。子代理的提示词携带 Hermes 策展课程、消息窗口帧和可更新技能列表；其工具集白名单只保留 `skill` 查看器，最终答案通过结构化输出契约捕获。该派发会以仅日志的 `session/distill-review-request` 事件记录精确的路由、提示词、工具白名单和 token 上限，使模型可见输入可从会话日志中重建。
+每个回合完成（`agent/turn-stopping` 触发）时，插件会收集自上次蒸馏检查点以来新增的人类 `user/message` 事件；数量达到 `minUserMessages` 后，派发一个后台反省子代理（Hermes Agent 后台反省的形态：受限工具集的全新子代理，在回合之后运行，从不与用户任务争抢）。子代理的提示词携带 Hermes 策展课程、消息窗口帧和可更新技能列表；其工具集白名单只保留 `skill` 查看器，最终答案通过结构化输出契约捕获。该派发会以仅日志的 `session/distill-review-request` 事件记录精确的路由、提示词、工具白名单和 token 上限，使模型可见输入可从会话日志中重建。
 
 反省子代理提议以下之一：
 

@@ -1,7 +1,7 @@
 /**
  * Automatic conversation reflection and skill distillation.
  *
- * Listens for `agent/settled` and, after enough new user messages accumulate,
+ * Listens for `agent/turn-stopping` and, after enough new user messages accumulate,
  * spawns a background review subagent over the recent conversation (Hermes
  * Agent's background-review shape: a forked agent with a restricted toolset,
  * running after the turn, never competing with the user's task). When the
@@ -26,10 +26,9 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
-import type { Context } from 'cordis'
-import z from 'schemastery'
+import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { SettleReason } from '@deepseek-ai/dsh-agent'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -161,7 +160,7 @@ const REVIEW_SCHEMA: ObjectJsonSchema = {
 }
 
 /**
- * Register the distillation plugin: review scheduling on `agent/settled`,
+ * Register the distillation plugin: review scheduling on `agent/turn-stopping`,
  * background subagent dispatch, and `SKILL.md` materialization into a local
  * skill root.
  * @param ctx - context exposing the subagent and skill services.
@@ -173,8 +172,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   assertObjectJsonSchema(REVIEW_SCHEMA)
   const pending = new Map<string, Promise<void>>()
 
-  ctx.on('agent/settled', (agent: Agent, _turn: number, reason: SettleReason) => {
-    if (reason.kind !== 'completed') return
+  ctx.on('agent/turn-stopping', ({ agent }: { agent: Agent }) => {
     const session = agent.session
     if (pending.has(session.id)) return
     const job = (async () => {

@@ -1,0 +1,6 @@
+# distill bundle patch: mounts the distill row into the profile composition.
+# The row name resolves through the profile directory's node_modules (the
+# bundle is installed there by `dsh plugin --profile <name> add <dir>`).
+- insert:
+    - id: distill
+      name: '@dsh-external/distill'
