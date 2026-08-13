@@ -3,4 +3,4 @@
 # bundle is installed there by `dsh plugin --profile <name> add <dir>`).
 - insert:
     - id: distill
-      name: '@dsh-external/distill'
+      name: 'distill'

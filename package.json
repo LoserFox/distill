@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-external/distill",
+  "name": "distill",
   "description": "Automatic conversation reflection and skill distillation for the DeepSeek Harness",
   "version": "0.1.0",
   "private": true,

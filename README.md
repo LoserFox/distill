@@ -1,4 +1,4 @@
-# @dsh-external/distill
+# distill
 
 ## 安装（DSH profile bundle）
 

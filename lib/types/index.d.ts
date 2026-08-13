@@ -18,7 +18,7 @@
  * view skills (the `skill` tool) and must report its proposal through the
  * structured-output contract.
  *
- * @module @dsh-external/distill
+ * @module distill
  */
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
