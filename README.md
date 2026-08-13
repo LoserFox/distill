@@ -10,7 +10,7 @@ dsh --profile web --dump-config | grep distill
 ```
 
 - 插入行 id：`distill`（cordis.patch.yml）；不注册任何面向模型的工具或技能——它只挂接 `agent/turn-stopping` 并运行后台反省。
-- **宿主前提**：dsh 组合必须挂载 `subagent-spawn`（注册反省子代理使用的 `spawn` 子代理提供方）与 `tool-skill`（子代理可调用的 `skill` 查看器）——两者在 base bundle 中默认存在。
+- **宿主前提**：dsh 组合必须挂载 `subagent-spawn-in-process`（注册反省子代理使用的 `spawn` 子代理提供方）与 `tool-skill`（子代理可调用的 `skill` 查看器）——两者在 base bundle 中默认存在。
 - 卸载：`dsh plugin --profile web remove distill`。
 - 安装后需重启目标 profile 的 DSH 进程（组合层变更不参与 HMR 热更新）。
 
@@ -18,7 +18,7 @@ dsh --profile web --dump-config | grep distill
 
 自动对话反思与技能蒸馏。
 
-需要 `ctx.subagents`（`inject: ['subagents']`）以及已注册的子代理提供方——`subagent-spawn` 插件注册了默认的 `spawn` 提供方——并且部署中包含面向模型的 `skill` 工具（`tool-skill`），反省子代理才能查看技能。反省提示词改编自 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) `_SKILL_REVIEW_PROMPT`（MIT 许可，Copyright (c) 2025 Nous Research），针对本界面做了改写；完整署名见源文件头。
+需要 `ctx.subagents`（`inject: ['subagents']`）以及已注册的子代理提供方——`subagent-spawn-in-process` 插件注册了默认的 `spawn` 提供方——并且部署中包含面向模型的 `skill` 工具（`tool-skill`），反省子代理才能查看技能。反省提示词改编自 Nous Research 的 [hermes-agent](https://github.com/NousResearch/hermes-agent) `_SKILL_REVIEW_PROMPT`（MIT 许可，Copyright (c) 2025 Nous Research），针对本界面做了改写；完整署名见源文件头。
 
 ## 行为
 
