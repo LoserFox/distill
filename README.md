@@ -1,14 +1,14 @@
 # @dsh-external/distill
 
-## 安装（dshx / Marisa 外部插件）
+## 安装（mygo 外部插件）
 
 ```sh
-dshx install distill <目录|git-url>
+mygo install distill <目录|git-url>
 ```
 
 - 清单 id：`distill`（dsh.plugin.json）；不注册任何面向模型的工具或技能——它只挂接 `agent/settled` 并运行后台反省。
 - **宿主前提**：dsh 组合（cordis.yml）必须挂载 `subagent-spawn`（注册反省子代理使用的 `spawn` 子代理提供方）与 `tool-skill`（子代理可调用的 `skill` 查看器）——两者在 `base.cordis.yml` 中默认存在。
-- 卸载：`dshx remove distill`。
+- 卸载：`mygo remove distill`。
 
 ## 概述
 

@@ -25,9 +25,7 @@
     "@deepseek-ai/dsh-subagent": "^0.0.1",
     "@deepseek-ai/dsh-timeout": "^0.0.1",
     "@deepseek-ai/dsh-tools": "^0.0.1",
-    "cordis": "^4.0.0-rc.7"
-  },
-  "dependencies": {
+    "cordis": "^4.0.0-rc.7",
     "schemastery": "^3.18.0"
   },
   "devDependencies": {

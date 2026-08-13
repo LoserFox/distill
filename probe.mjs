@@ -72,7 +72,7 @@ const configPath = stripEntry(originalConfig, 'distill')
 // Take the real personal overlay but keep only the distill insert: unrelated
 // overlay entries are shared-machine state that could break the probe's boot
 // (e.g. a concurrently installed telegram bot with no token fails activation,
-// and the package-name-mounted marisa-panel cannot resolve from the temp
+// and the package-name-mounted mygo-panel cannot resolve from the temp
 // copy's baseUrl). The probe's contract is "distill mounts and activates in
 // the real base composition", so only its insert is needed.
 const personal = loadPersonalPatches('distill-probe') ?? []
