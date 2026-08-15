@@ -22,6 +22,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+import type { Session } from '@deepseek-ai/dsh-session';
 export declare const name = "distill";
 export declare const inject: string[];
 /** Distillation plugin configuration. */
@@ -49,7 +50,7 @@ export interface Config {
 }
 /** Validate and detach distillation configuration. */
 export declare const Config: z<Config>;
-/** Exact model-visible request recorded before one review dispatch. */
+/** Exact model-visible request emitted before one review dispatch. */
 export interface DistillReviewRequestEventData {
     /** Exact human `user/message` seqs represented in the review window. */
     readonly messageSeqs: number[];
@@ -67,10 +68,10 @@ export interface DistillReviewRequestEventData {
     /** Exact child output-token cap. */
     readonly maxTokens: number;
 }
-declare module '@deepseek-ai/dsh-session' {
-    interface SessionEventMap {
-        /** Log-only pre-dispatch record of one review subagent request. */
-        'session/distill-review-request': DistillReviewRequestEventData;
+declare module '@deepseek-ai/cordis' {
+    interface Events {
+        /** Ephemeral pre-dispatch notification; never written to the session log. */
+        'distill/review-request'(session: Session, request: DistillReviewRequestEventData): void;
     }
 }
 /** One distilled skill proposal extracted from the reflection output. */

@@ -125,9 +125,18 @@ function settleAgent(ctx: Context, agent: Agent): void {
   agentEvents(ctx, agent).emit('agent/turn-stopping', { turn: 1, signal: new AbortController().signal })
 }
 
+function captureReviewRequests(ctx: Context): distill.DistillReviewRequestEventData[] {
+  const requests: distill.DistillReviewRequestEventData[] = []
+  ctx.on('distill/review-request', (_session, request) => {
+    requests.push(request)
+  })
+  return requests
+}
+
 describe('dsh-distill', () => {
   it('spawns a review subagent after enough user messages and writes a SKILL.md bundle', async () => {
     const { ctx, dir, provider } = await setup()
+    const reviewRequests = captureReviewRequests(ctx)
     await ctx.plugin(distill, {
       enabled: true,
       minUserMessages: 2,
@@ -165,10 +174,11 @@ describe('dsh-distill', () => {
       expect(prompt.text).toContain('Reflect on this JSON array of human messages:')
       expect(prompt.text).toContain(JSON.stringify(['how do I file an issue?', 'use [bug][area] format']))
     }
-    const request = session.events.find(event => event.type === 'session/distill-review-request')
+    const request = reviewRequests[0]
     expect(request).toBeDefined()
-    expect(request?.data.messageSeqs).toEqual([s1, s2])
-    expect(request?.data.toolFilter).toEqual({ allow: ['skill'] })
+    expect(request?.messageSeqs).toEqual([s1, s2])
+    expect(request?.toolFilter).toEqual({ allow: ['skill'] })
+    expect(session.events.map(event => event.type)).not.toContain('session/distill-review-request')
 
     const filePath = join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md')
     await waitForFile(filePath)
@@ -550,6 +560,7 @@ describe('dsh-distill', () => {
 
   it('continues from the last checkpoint on a second review', async () => {
     const { ctx, dir, provider } = await setup()
+    const reviewRequests = captureReviewRequests(ctx)
     await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
     const session = ctx.sessions.create(SessionId('s18'), { meta: { cwd: dir } })
     const agent = stubAgent(session)
@@ -562,9 +573,34 @@ describe('dsh-distill', () => {
     const second = userMessage(session, 'second message')
     settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(2) }, { timeout: 5000 })
-    const requests = session.events.filter(event => event.type === 'session/distill-review-request')
-    expect(requests[0]?.data.messageSeqs).toEqual([first])
-    expect(requests[1]?.data.messageSeqs).toEqual([second])
+    expect(reviewRequests[0]?.messageSeqs).toEqual([first])
+    expect(reviewRequests[1]?.messageSeqs).toEqual([second])
+    expect(session.events.map(event => event.type)).not.toContain('session/distill-review-request')
+    await rm(dir, { recursive: true, force: true })
+    await ctx.fiber.dispose()
+  })
+
+  it('keeps the checkpoint when the plugin fiber reloads', async () => {
+    const { ctx, dir, provider } = await setup({ action: 'skip' })
+    const reviewRequests = captureReviewRequests(ctx)
+    const config = { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' as const }
+    const fiber = await ctx.plugin(distill, config)
+    const session = ctx.sessions.create(SessionId('s18-reload'), { meta: { cwd: dir } })
+    const agent = stubAgent(session)
+    ctx.agents.register(agent)
+
+    const first = userMessage(session, 'first message')
+    settleAgent(ctx, agent)
+    await vi.waitFor(() => { expect(reviewRequests).toHaveLength(1) }, { timeout: 5000 })
+    await fiber.dispose()
+    await ctx.plugin(distill, config)
+
+    const second = userMessage(session, 'second message')
+    settleAgent(ctx, agent)
+    await vi.waitFor(() => { expect(provider.requests).toHaveLength(2) }, { timeout: 5000 })
+
+    expect(reviewRequests[0]?.messageSeqs).toEqual([first])
+    expect(reviewRequests[1]?.messageSeqs).toEqual([second])
     await rm(dir, { recursive: true, force: true })
     await ctx.fiber.dispose()
   })
@@ -617,25 +653,24 @@ describe('dsh-distill', () => {
     await ctx.fiber.dispose()
   })
 
-  it('restarts the window from the beginning after an empty checkpoint event', async () => {
+  it('starts a resumed session window at its first live event', async () => {
     const { ctx, dir, provider } = await setup()
+    const reviewRequests = captureReviewRequests(ctx)
     await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
-    const session = ctx.sessions.create(SessionId('s21'), { meta: { cwd: dir } })
-    session.append('session/distill-review-request', {
-      messageSeqs: [],
-      route: { provider: 'route', model: 'model' },
-      prompt: 'stale',
-      toolFilter: { allow: ['skill'] },
-      maxTokens: 2048,
+    const seed = Session.create(SessionId('s21-seed'))
+    userMessage(seed, 'message from the previous process')
+    const session = ctx.sessions.create(SessionId('s21'), {
+      seed: seed.events,
+      meta: { cwd: dir },
     })
     const agent = stubAgent(session)
     ctx.agents.register(agent)
-    const msg = userMessage(session, 'hello')
+    const msg = userMessage(session, 'message from this process')
     settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
 
-    const request = session.events.filter(event => event.type === 'session/distill-review-request')
-    expect(request[1]?.data.messageSeqs).toEqual([msg])
+    expect(reviewRequests[0]?.messageSeqs).toEqual([msg])
+    expect(session.events.map(event => event.type)).not.toContain('session/distill-review-request')
     await rm(dir, { recursive: true, force: true })
     await ctx.fiber.dispose()
   })

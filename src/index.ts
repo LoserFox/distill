@@ -47,6 +47,8 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const SKILL_TOOL = 'skill'
 /** Frontmatter marker proving one `SKILL.md` was created by this plugin. */
 const DISTILL_MARKER = 'distilled-by: dsh-distill'
+/** Handoff cursor that survives plugin-fiber reloads without retaining disposed sessions. */
+const reviewCheckpoints = new WeakMap<Session, number>()
 
 /** Distillation plugin configuration. */
 export interface Config {
@@ -86,7 +88,7 @@ export const Config: z<Config> = z.object({
   allowUpdate: z.boolean().default(true),
 })
 
-/** Exact model-visible request recorded before one review dispatch. */
+/** Exact model-visible request emitted before one review dispatch. */
 export interface DistillReviewRequestEventData {
   /** Exact human `user/message` seqs represented in the review window. */
   readonly messageSeqs: number[]
@@ -100,10 +102,10 @@ export interface DistillReviewRequestEventData {
   readonly maxTokens: number
 }
 
-declare module '@deepseek-ai/dsh-session' {
-  interface SessionEventMap {
-    /** Log-only pre-dispatch record of one review subagent request. */
-    'session/distill-review-request': DistillReviewRequestEventData
+declare module '@deepseek-ai/cordis' {
+  interface Events {
+    /** Ephemeral pre-dispatch notification; never written to the session log. */
+    'distill/review-request'(session: Session, request: DistillReviewRequestEventData): void
   }
 }
 
@@ -241,7 +243,8 @@ async function reviewOnce(
   agent: Agent,
   session: Session,
 ): Promise<void> {
-  const window = collectWindow(session.events, checkpointSeq(session.events))
+  const checkpoint = reviewCheckpoints.get(session) ?? session.firstLiveSeq - 1
+  const window = collectWindow(session.events, checkpoint)
   if (window.messages.length < config.minUserMessages) return
   const target = resolveTarget(config, agent)
   if (target === undefined) {
@@ -252,13 +255,19 @@ async function reviewOnce(
     ? await listOwnedSkillNames(config, session.header.cwd)
     : []
   const prompt = buildReviewPrompt(window.messages, updatable)
-  session.append('session/distill-review-request', {
+  const request: DistillReviewRequestEventData = {
     messageSeqs: window.messages.map(message => message.seq),
     route: target,
     prompt,
     toolFilter: { allow: [SKILL_TOOL] },
     maxTokens: config.maxTokens,
-  })
+  }
+  reviewCheckpoints.set(session, window.throughSeq)
+  try {
+    ctx.emit('distill/review-request', session, request)
+  } catch (error) {
+    ctx.logger.warn(`distill: review request observer failed: ${errorMessage(error)}`)
+  }
   const structured = await runReview(ctx, config, agent, prompt, target)
   await applyProposal(ctx, config, session, structured)
 }
@@ -279,22 +288,6 @@ function collectWindow(events: readonly SessionEvent[], sinceSeq: number): Disti
     throughSeq = event.seq
   }
   return { messages, throughSeq }
-}
-
-/** Derive the reflection checkpoint from the last logged distillation request. */
-function checkpointSeq(events: readonly SessionEvent[]): number {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    // The loop bounds prove the read-only event view contains this index.
-    // oxlint-disable-next-line typescript/no-non-null-assertion
-    const event = events[index]!
-    if (event.type !== 'session/distill-review-request') continue
-    const seqs = event.data.messageSeqs
-    if (seqs.length === 0) return -1
-    let last = -1
-    for (const seq of seqs) last = seq
-    return last
-  }
-  return -1
 }
 
 /** Resolve the explicit route pair or the agent's own route. */
