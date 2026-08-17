@@ -1,7 +1,7 @@
 {
   "name": "@loserfox/distill",
   "description": "Automatic conversation reflection and skill distillation for the DeepSeek Harness",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -35,5 +35,9 @@
   },
   "devDependencies": {
     "typescript": "^5.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoserFox/distill.git"
   }
 }
