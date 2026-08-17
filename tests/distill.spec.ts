@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -91,6 +91,27 @@ function userMessage(session: Session, text: string): number {
   }), { surfaceOp: 'append' }).seq
 }
 
+/** Read every review record the ledger holds for one session id. */
+async function ledgerRecords(dir: string, sessionId: string): Promise<DistillReviewRequestRecord[]> {
+  const filePath = join(dir, 'distill', 'reviews', `${sessionId}.jsonl`)
+  let raw: string
+  try {
+    raw = await readFile(filePath, 'utf8')
+  } catch {
+    return []
+  }
+  return raw.split('\n')
+    .filter(line => line.trim().length > 0)
+    .map(line => JSON.parse(line) as DistillReviewRequestRecord)
+}
+
+/** Pre-write one ledger record (simulating a prior review dispatch). */
+async function seedLedgerRecord(dir: string, sessionId: string, record: DistillReviewRequestRecord): Promise<void> {
+  const filePath = join(dir, 'distill', 'reviews', `${sessionId}.jsonl`)
+  await mkdir(join(dir, 'distill', 'reviews'), { recursive: true })
+  await writeFile(filePath, `${JSON.stringify(record)}\n`, { encoding: 'utf8' })
+}
+
 function stubAgent(session: Session, options: { provider?: string; model?: string } = {}): Agent {
   return {
     id: session.id,
@@ -118,8 +139,15 @@ async function setup(structured: unknown = CREATE_JSON, options: { stopReason?: 
   const provider = new RecordingProvider('spawn', structured, options)
   ctx.subagents.registerProvider(provider)
   const dir = await mkdtemp(join(tmpdir(), 'distill-test-'))
+  // Isolate the review ledger under the temp root so tests never touch the
+  // real harness home, mirroring the DSH_AGENTS_HOME/HOME stubbing below.
+  process.env.DSH_HOME = dir
   return { ctx, dir, provider }
 }
+
+afterEach(() => {
+  delete process.env.DSH_HOME
+})
 
 function settleAgent(ctx: Context, agent: Agent): void {
   agentEvents(ctx, agent).emit('agent/turn-stopping', { turn: 1, signal: new AbortController().signal })
@@ -165,10 +193,10 @@ describe('dsh-distill', () => {
       expect(prompt.text).toContain('Reflect on this JSON array of human messages:')
       expect(prompt.text).toContain(JSON.stringify(['how do I file an issue?', 'use [bug][area] format']))
     }
-    const request = session.events.find(event => event.type === 'session/distill-review-request')
-    expect(request).toBeDefined()
-    expect(request?.data.messageSeqs).toEqual([s1, s2])
-    expect(request?.data.toolFilter).toEqual({ allow: ['skill'] })
+    const records = await ledgerRecords(dir, 's1')
+    expect(records).toHaveLength(1)
+    expect(records[0]?.messageSeqs).toEqual([s1, s2])
+    expect(records[0]?.toolFilter).toEqual({ allow: ['skill'] })
 
     const filePath = join(dir, '.agents', 'skills', 'issue-format', 'SKILL.md')
     await waitForFile(filePath)
@@ -562,9 +590,10 @@ describe('dsh-distill', () => {
     const second = userMessage(session, 'second message')
     settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(2) }, { timeout: 5000 })
-    const requests = session.events.filter(event => event.type === 'session/distill-review-request')
-    expect(requests[0]?.data.messageSeqs).toEqual([first])
-    expect(requests[1]?.data.messageSeqs).toEqual([second])
+    const records = await ledgerRecords(dir, 's18')
+    expect(records).toHaveLength(2)
+    expect(records[0]?.messageSeqs).toEqual([first])
+    expect(records[1]?.messageSeqs).toEqual([second])
     await rm(dir, { recursive: true, force: true })
     await ctx.fiber.dispose()
   })
@@ -617,11 +646,11 @@ describe('dsh-distill', () => {
     await ctx.fiber.dispose()
   })
 
-  it('restarts the window from the beginning after an empty checkpoint event', async () => {
+  it('restarts the window from the beginning after an empty checkpoint record', async () => {
     const { ctx, dir, provider } = await setup()
     await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'project' })
     const session = ctx.sessions.create(SessionId('s21'), { meta: { cwd: dir } })
-    session.append('session/distill-review-request', {
+    await seedLedgerRecord(dir, 's21', {
       messageSeqs: [],
       route: { provider: 'route', model: 'model' },
       prompt: 'stale',
@@ -634,8 +663,9 @@ describe('dsh-distill', () => {
     settleAgent(ctx, agent)
     await vi.waitFor(() => { expect(provider.requests).toHaveLength(1) }, { timeout: 5000 })
 
-    const request = session.events.filter(event => event.type === 'session/distill-review-request')
-    expect(request[1]?.data.messageSeqs).toEqual([msg])
+    const records = await ledgerRecords(dir, 's21')
+    expect(records).toHaveLength(2)
+    expect(records[1]?.messageSeqs).toEqual([msg])
     await rm(dir, { recursive: true, force: true })
     await ctx.fiber.dispose()
   })
@@ -666,8 +696,12 @@ describe('dsh-distill', () => {
   it('resolves the user root from the HOME directory when neither config nor DSH_AGENTS_HOME is set', async () => {
     const { ctx, dir } = await setup()
     const originalHome = process.env.HOME
+    const originalProfile = process.env.USERPROFILE
     const originalAgentsHome = process.env.DSH_AGENTS_HOME
+    // `os.homedir()` reads HOME on POSIX but USERPROFILE on Windows; stub
+    // both so the user-root resolution is exercised on every platform.
     process.env.HOME = dir
+    process.env.USERPROFILE = dir
     delete process.env.DSH_AGENTS_HOME
     try {
       await ctx.plugin(distill, { minUserMessages: 1, provider: 'route', model: 'model', targetRoot: 'user' })
@@ -683,6 +717,8 @@ describe('dsh-distill', () => {
     } finally {
       if (originalHome === undefined) delete process.env.HOME
       else process.env.HOME = originalHome
+      if (originalProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = originalProfile
       if (originalAgentsHome === undefined) delete process.env.DSH_AGENTS_HOME
       else process.env.DSH_AGENTS_HOME = originalAgentsHome
     }

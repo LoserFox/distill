@@ -22,7 +22,8 @@
  */
 
 import { accessSync } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { access } from 'node:fs/promises'
@@ -31,8 +32,7 @@ import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Session } from '@deepseek-ai/dsh-session'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { isSkillName } from '@deepseek-ai/dsh-skill'
 import { assertObjectJsonSchema, type ObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import { deadline, MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
@@ -86,8 +86,19 @@ export const Config: z<Config> = z.object({
   allowUpdate: z.boolean().default(true),
 })
 
-/** Exact model-visible request recorded before one review dispatch. */
-export interface DistillReviewRequestEventData {
+/**
+ * Exact model-visible request recorded before one review dispatch.
+ *
+ * Previously this record was appended to the session log as the
+ * `session/distill-review-request` event. That event type is not part of the
+ * harness's hard-coded known-type set (`KNOWN_SESSION_EVENT_TYPES`), and the
+ * `session.append` API exposes no way to mark a custom event `ignorable`, so
+ * any restart would refuse to load the whole log (`SessionFormatUnsupportedError`)
+ * and report the session as having been written by a newer harness. The
+ * record therefore lives in the plugin's own review ledger instead; the
+ * checkpoint derivation reads from the same ledger.
+ */
+export interface DistillReviewRequestRecord {
   /** Exact human `user/message` seqs represented in the review window. */
   readonly messageSeqs: number[]
   /** Exact review subagent route. */
@@ -98,13 +109,6 @@ export interface DistillReviewRequestEventData {
   readonly toolFilter: { allow: readonly string[] }
   /** Exact child output-token cap. */
   readonly maxTokens: number
-}
-
-declare module '@deepseek-ai/dsh-session' {
-  interface SessionEventMap {
-    /** Log-only pre-dispatch record of one review subagent request. */
-    'session/distill-review-request': DistillReviewRequestEventData
-  }
 }
 
 /** One distilled skill proposal extracted from the reflection output. */
@@ -160,6 +164,68 @@ const REVIEW_SCHEMA: ObjectJsonSchema = {
 }
 
 /**
+ * Persist review-request records outside the session log.
+ *
+ * One JSONL file per session under `<dshHome>/distill/reviews/`, appended on
+ * every review dispatch. The checkpoint for the next pass is the last
+ * `messageSeqs` entry of the last record, matching the semantics the old
+ * in-log event used to carry. Per-session files keep concurrent harness
+ * processes (e.g. `web` and `headless` profiles) from contending on one
+ * append-only artifact, and the records remain auditable without touching
+ * the session log's known-event-type contract.
+ */
+export class DistillLedger {
+  /** Create a ledger rooted at one harness home directory. */
+  static atHome(home: string): DistillLedger {
+    return new DistillLedger(join(home, 'distill', 'reviews'))
+  }
+
+  private constructor(private readonly root: string) {}
+
+  /** Append one review-request record for a session. */
+  async record(sessionId: string, record: DistillReviewRequestRecord): Promise<void> {
+    await mkdir(this.root, { recursive: true })
+    await appendFile(
+      join(this.root, `${sessionId}.jsonl`),
+      `${JSON.stringify(record)}\n`,
+      { encoding: 'utf8' },
+    )
+  }
+
+  /**
+   * Derive the reflection checkpoint for a session: the last reviewed
+   * `user/message` seq, or `-1` when nothing was reviewed yet. A record with
+   * an empty `messageSeqs` restarts the window from the beginning.
+   */
+  async checkpoint(sessionId: string): Promise<number> {
+    let raw: string
+    try {
+      raw = await readFile(join(this.root, `${sessionId}.jsonl`), 'utf8')
+    } catch {
+      return -1
+    }
+    let last = -1
+    for (const line of raw.split('\n')) {
+      if (line.trim().length === 0) continue
+      try {
+        const record = JSON.parse(line) as { messageSeqs?: unknown }
+        if (!Array.isArray(record.messageSeqs) || record.messageSeqs.length === 0) {
+          last = -1
+          continue
+        }
+        for (const seq of record.messageSeqs) {
+          if (typeof seq === 'number' && Number.isSafeInteger(seq)) last = seq
+        }
+      } catch {
+        // A torn trailing line (crash mid-append) is not a checkpoint.
+        continue
+      }
+    }
+    return last
+  }
+}
+
+/**
  * Register the distillation plugin: review scheduling on `agent/turn-stopping`,
  * background subagent dispatch, and `SKILL.md` materialization into a local
  * skill root.
@@ -170,6 +236,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   const resolved = validateConfig(config)
   if (!resolved.enabled) return
   assertObjectJsonSchema(REVIEW_SCHEMA)
+  const ledger = DistillLedger.atHome(resolveDshHome())
   const pending = new Map<string, Promise<void>>()
 
   ctx.on('agent/turn-stopping', ({ agent }: { agent: Agent }) => {
@@ -177,7 +244,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (pending.has(session.id)) return
     const job = (async () => {
       try {
-        await reviewOnce(ctx, resolved, agent, session)
+        await reviewOnce(ctx, resolved, ledger, agent, session)
       } catch (error) {
         ctx.logger.warn(`distill: review failed: ${errorMessage(error)}`)
       } finally {
@@ -232,16 +299,18 @@ interface ResolvedConfig {
  * distillation checkpoint, then materialize the proposed skill change.
  * @param ctx - context exposing the subagent and skill services.
  * @param config - validated plugin configuration.
+ * @param ledger - persistence for review-request records and checkpoints.
  * @param agent - the settled agent whose session is the distillation source.
  * @param session - the agent's live session.
  */
 async function reviewOnce(
   ctx: Context,
   config: ResolvedConfig,
+  ledger: DistillLedger,
   agent: Agent,
   session: Session,
 ): Promise<void> {
-  const window = collectWindow(session.events, checkpointSeq(session.events))
+  const window = collectWindow(session.events, await ledger.checkpoint(session.id))
   if (window.messages.length < config.minUserMessages) return
   const target = resolveTarget(config, agent)
   if (target === undefined) {
@@ -252,7 +321,7 @@ async function reviewOnce(
     ? await listOwnedSkillNames(config, session.header.cwd)
     : []
   const prompt = buildReviewPrompt(window.messages, updatable)
-  session.append('session/distill-review-request', {
+  await ledger.record(session.id, {
     messageSeqs: window.messages.map(message => message.seq),
     route: target,
     prompt,
@@ -279,22 +348,6 @@ function collectWindow(events: readonly SessionEvent[], sinceSeq: number): Disti
     throughSeq = event.seq
   }
   return { messages, throughSeq }
-}
-
-/** Derive the reflection checkpoint from the last logged distillation request. */
-function checkpointSeq(events: readonly SessionEvent[]): number {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    // The loop bounds prove the read-only event view contains this index.
-    // oxlint-disable-next-line typescript/no-non-null-assertion
-    const event = events[index]!
-    if (event.type !== 'session/distill-review-request') continue
-    const seqs = event.data.messageSeqs
-    if (seqs.length === 0) return -1
-    let last = -1
-    for (const seq of seqs) last = seq
-    return last
-  }
-  return -1
 }
 
 /** Resolve the explicit route pair or the agent's own route. */
@@ -585,6 +638,16 @@ function resolveUserAgentsHome(configured: string | undefined): string {
   if (configured !== undefined && configured.length > 0) return resolve(configured)
   const envConfigured = process.env.DSH_AGENTS_HOME
   return envConfigured !== undefined && envConfigured.length > 0 ? resolve(envConfigured) : homedir()
+}
+
+/**
+ * Resolve the DeepSeek Harness home root, mirroring `dsh-home-paths`:
+ * an explicit `$DSH_HOME` wins, otherwise `~/.dsh`. Kept dependency-free so
+ * the plugin never needs a peer on the harness's own path helper package.
+ */
+function resolveDshHome(): string {
+  const envHome = process.env.DSH_HOME
+  return envHome !== undefined && envHome.trim().length > 0 ? resolve(envHome) : join(homedir(), '.dsh')
 }
 
 /** Walk upward from a directory to the git root, falling back to the start path. */

@@ -22,7 +22,9 @@ dsh --profile web --dump-config | grep distill
 
 ## 行为
 
-每个回合完成（`agent/turn-stopping` 触发）时，插件会收集自上次蒸馏检查点以来新增的人类 `user/message` 事件；数量达到 `minUserMessages` 后，派发一个后台反省子代理（Hermes Agent 后台反省的形态：受限工具集的全新子代理，在回合之后运行，从不与用户任务争抢）。子代理的提示词携带 Hermes 策展课程、消息窗口帧和可更新技能列表；其工具集白名单只保留 `skill` 查看器，最终答案通过结构化输出契约捕获。该派发会以仅日志的 `session/distill-review-request` 事件记录精确的路由、提示词、工具白名单和 token 上限，使模型可见输入可从会话日志中重建。
+每个回合完成（`agent/turn-stopping` 触发）时，插件会收集自上次蒸馏检查点以来新增的人类 `user/message` 事件；数量达到 `minUserMessages` 后，派发一个后台反省子代理（Hermes Agent 后台反省的形态：受限工具集的全新子代理，在回合之后运行，从不与用户任务争抢）。子代理的提示词携带 Hermes 策展课程、消息窗口帧和可更新技能列表；其工具集白名单只保留 `skill` 查看器，最终答案通过结构化输出契约捕获。该派发会以一条记录写入插件自己的审查账本（`$DSH_HOME/distill/reviews/<sessionId>.jsonl`，默认 `~/.dsh/distill/reviews/`），保存精确的路由、提示词、工具白名单和 token 上限，使模型可见输入可从账本中重建。
+
+> **为什么不用会话日志**：0.1.0 把这条记录作为 `session/distill-review-request` 事件追加进会话日志。该事件类型不在 harness 的硬编码已知类型集合（`KNOWN_SESSION_EVENT_TYPES`）中，而 `session.append` 不提供标记 `ignorable` 的通道，因此任何重启都会以 `SessionFormatUnsupportedError` 拒绝加载整个日志（"written by a newer harness"）。0.1.1 起记录改存独立账本，会话日志保持纯 harness 已知事件，重启不再报错。
 
 反省子代理提议以下之一：
 
@@ -49,13 +51,13 @@ dsh --profile web --dump-config | grep distill
 
 ## 模型体验
 
-主对话不注册任何工具或提示，插件从不改变其表面。唯一的模型可见效果是间接的：后台运行一个带 `skill` 工具的反省子代理（它看到与主 agent 相同的目录，可在提议前查看任意技能内容），写入或更新的技能会在后续轮次出现在 `dsh-tool-skill` 目录中。反省派发本身是记录在日志中的辅助委派，对话循环不可见。
+主对话不注册任何工具或提示，插件从不改变其表面。唯一的模型可见效果是间接的：后台运行一个带 `skill` 工具的反省子代理（它看到与主 agent 相同的目录，可在提议前查看任意技能内容），写入或更新的技能会在后续轮次出现在 `dsh-tool-skill` 目录中。反省派发本身是记录在审查账本中的辅助委派，对话循环不可见。
 
 ## 已知限制与后续工作
 
 - **仅整文件更新** — update 会重写整个 `SKILL.md`；不支持局部补丁或支持文件（`references/` / `templates/` / `scripts/`）写入。提示词把支持文件意图并入正文或跳过。
 - **所有权标记按来源选择** — 本变更之前蒸馏出的技能没有 `distilled-by` 标记，会被当作用户所有（永不更新），除非用户重新创建或手动标记。
-- **内存检查点推导** — 检查点从最近一条已记录的 `session/distill-review-request` 推导；从未反省过的会话从第一条用户消息开始。
+- **检查点来自审查账本** — 检查点从 `$DSH_HOME/distill/reviews/<sessionId>.jsonl` 的最后一条记录推导；从未反省过的会话从第一条用户消息开始。从 0.1.0 升级后，旧会话日志中残留的 `session/distill-review-request` 事件不再被读取（升级前已被该事件污染的日志仍需用 harness 数据修复清理后才能加载）。
 - **项目目标需要 git 根** — 没有 `.git` 祖先时，项目目标回退到会话 cwd。
 - **每个会话一次进行中的反省** — 反省进行期间到达的已结束回合会被跳过；下一次结算会重新评估。
 - **反省子代理依赖部署的工具** — 子代理的 `skill` 工具和目录来自同一部署中的 `tool-skill`；没有它的部署仍会运行反省，但子代理在提议前无法查看技能。
