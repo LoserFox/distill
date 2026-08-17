@@ -49,8 +49,19 @@ export interface Config {
 }
 /** Validate and detach distillation configuration. */
 export declare const Config: z<Config>;
-/** Exact model-visible request recorded before one review dispatch. */
-export interface DistillReviewRequestEventData {
+/**
+ * Exact model-visible request recorded before one review dispatch.
+ *
+ * Previously this record was appended to the session log as the
+ * `session/distill-review-request` event. That event type is not part of the
+ * harness's hard-coded known-type set (`KNOWN_SESSION_EVENT_TYPES`), and the
+ * `session.append` API exposes no way to mark a custom event `ignorable`, so
+ * any restart would refuse to load the whole log (`SessionFormatUnsupportedError`)
+ * and report the session as having been written by a newer harness. The
+ * record therefore lives in the plugin's own review ledger instead; the
+ * checkpoint derivation reads from the same ledger.
+ */
+export interface DistillReviewRequestRecord {
     /** Exact human `user/message` seqs represented in the review window. */
     readonly messageSeqs: number[];
     /** Exact review subagent route. */
@@ -66,12 +77,6 @@ export interface DistillReviewRequestEventData {
     };
     /** Exact child output-token cap. */
     readonly maxTokens: number;
-}
-declare module '@deepseek-ai/dsh-session' {
-    interface SessionEventMap {
-        /** Log-only pre-dispatch record of one review subagent request. */
-        'session/distill-review-request': DistillReviewRequestEventData;
-    }
 }
 /** One distilled skill proposal extracted from the reflection output. */
 export interface DistilledSkill {
@@ -100,6 +105,31 @@ export interface DistillMessageWindow {
         text: string;
     }[];
     readonly throughSeq: number;
+}
+/**
+ * Persist review-request records outside the session log.
+ *
+ * One JSONL file per session under `<dshHome>/distill/reviews/`, appended on
+ * every review dispatch. The checkpoint for the next pass is the last
+ * `messageSeqs` entry of the last record, matching the semantics the old
+ * in-log event used to carry. Per-session files keep concurrent harness
+ * processes (e.g. `web` and `headless` profiles) from contending on one
+ * append-only artifact, and the records remain auditable without touching
+ * the session log's known-event-type contract.
+ */
+export declare class DistillLedger {
+    private readonly root;
+    /** Create a ledger rooted at one harness home directory. */
+    static atHome(home: string): DistillLedger;
+    private constructor();
+    /** Append one review-request record for a session. */
+    record(sessionId: string, record: DistillReviewRequestRecord): Promise<void>;
+    /**
+     * Derive the reflection checkpoint for a session: the last reviewed
+     * `user/message` seq, or `-1` when nothing was reviewed yet. A record with
+     * an empty `messageSeqs` restarts the window from the beginning.
+     */
+    checkpoint(sessionId: string): Promise<number>;
 }
 /**
  * Register the distillation plugin: review scheduling on `agent/turn-stopping`,
